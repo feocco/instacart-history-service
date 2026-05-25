@@ -145,6 +145,33 @@ def test_product_search_endpoint_returns_history_without_sensitive_fields(tmp_pa
     assert "Loop Road" not in response.text
 
 
+def test_import_uploaded_csv_files(tmp_path) -> None:
+    client, _, _ = client_for(tmp_path)
+
+    response = client.post(
+        "/v1/import/instacart-csv-files",
+        json={
+            "files": [
+                {
+                    "relative_path": "account/family/INSTACART_FAMILY Purchased Items-2026 Order Report.csv",
+                    "content": "\n".join(
+                        [
+                            "",
+                            "Product Order Type,Order Date,Order ID,Item Number/ASIN,Payment Methods,Product Description,Product Quantity,Store Name,Sub-Category 1,Sub-Category 2,Additional Categories,Product Price,Price Paid (Before-Tax),Currency,Invoice URL,Product URL,Shipping Address (item),Gift Card Recipient,Gift Card Status,Product Image",
+                            'Regular,"Feb 05, 2026",19246577453429960,24756,Visa 1111,"De Cecco Rigatoni, No. 24",1,wegmans,,,,3.49,3.49,USD,https://invoice.example,https://www.instacart.com/products/24756,"1 Loop Road",,,https://image.example/rigatoni.jpg',
+                        ]
+                    ),
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items_created"] == 1
+    products = client.get("/v1/products", params={"q": "rigatoni"}).json()
+    assert products[0]["title"] == "De Cecco Rigatoni, No. 24"
+
+
 def test_plan_recommendations_fetches_planner_ingredients(tmp_path) -> None:
     client, repo, matcher = client_for(tmp_path)
     seed_product(repo)

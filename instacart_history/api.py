@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -14,6 +15,15 @@ from instacart_history.service import RecommendationService
 
 class ImportRequest(BaseModel):
     data_dir: str = "/Users/feocco/code/grocery-research/data/instacart"
+
+
+class ImportFilePayload(BaseModel):
+    relative_path: str
+    content: str
+
+
+class ImportFilesRequest(BaseModel):
+    files: list[ImportFilePayload]
 
 
 class IngredientsRequest(BaseModel):
@@ -46,6 +56,27 @@ def create_app(service: RecommendationService) -> FastAPI:
         if not data_dir.exists():
             raise HTTPException(status_code=404, detail="data_dir not found")
         result = InstacartCsvImporter(service.repo).import_directory(data_dir)
+        return {
+            "files_seen": result.files_seen,
+            "orders_created": result.orders_created,
+            "orders_updated": result.orders_updated,
+            "items_created": result.items_created,
+            "items_updated": result.items_updated,
+            "rows_skipped": result.rows_skipped,
+        }
+
+    @app.post("/v1/import/instacart-csv-files")
+    async def import_instacart_csv_files(request: ImportFilesRequest) -> dict[str, int]:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for file_payload in request.files:
+                relative = Path(file_payload.relative_path)
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise HTTPException(status_code=422, detail="relative_path must stay inside the upload root")
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(file_payload.content, encoding="utf-8")
+            result = InstacartCsvImporter(service.repo).import_directory(root)
         return {
             "files_seen": result.files_seen,
             "orders_created": result.orders_created,

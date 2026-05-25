@@ -40,6 +40,26 @@ Response:
 Counts depend on the current export folder. Re-importing the same files updates
 existing rows instead of creating duplicates.
 
+For POC imports into a remote Mac mini service, CSV file contents can be posted
+without committing order data:
+
+```http
+POST /v1/import/instacart-csv-files
+```
+
+Request:
+
+```json
+{
+  "files": [
+    {
+      "relative_path": "account/family/INSTACART_FAMILY Purchased Items-2026 Order Report.csv",
+      "content": "Product Order Type,Order Date,..."
+    }
+  ]
+}
+```
+
 ## Recommend Products For Ingredients
 
 ```http
