@@ -568,10 +568,22 @@ class HistoryRepository:
             return False
         with self.connect() as conn:
             for scope, value in checks:
-                row = conn.execute(
-                    "SELECT 1 FROM staples WHERE scope = ? AND value = ? AND active = 1 LIMIT 1",
-                    (scope, value),
-                ).fetchone()
+                if scope == "ingredient_text":
+                    row = conn.execute(
+                        """
+                        SELECT 1 FROM staples
+                        WHERE scope = 'ingredient_text'
+                            AND active = 1
+                            AND (value = ? OR instr(?, value) > 0)
+                        LIMIT 1
+                        """,
+                        (value, value),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT 1 FROM staples WHERE scope = ? AND value = ? AND active = 1 LIMIT 1",
+                        (scope, value),
+                    ).fetchone()
                 if row is not None:
                     return True
         return False

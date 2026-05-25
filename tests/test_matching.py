@@ -114,18 +114,19 @@ def test_seeded_staples_are_idempotent_and_filter_by_ingredient_text(tmp_path) -
 
     assert len(repo.list_staples()) == first_count
     assert repo.is_staple(ingredient={"food_name": "olive oil"}, product_id=None) is True
+    assert repo.is_staple(ingredient={"food_name": "lower-sodium vegetable or chicken broth"}, product_id=None) is True
     assert repo.is_staple(ingredient={"food_name": "rigatoni"}, product_id=None) is False
 
 
 def test_inactive_staples_do_not_filter_items(tmp_path) -> None:
     repo = HistoryRepository(tmp_path / "history.sqlite3")
-    staple = repo.upsert_staple(scope="ingredient_text", value="rice vinegar", label="rice vinegar", source="manual")
+    staple = repo.upsert_staple(scope="ingredient_text", value="gochugaru", label="gochugaru", source="manual")
 
-    assert repo.is_staple(ingredient={"food_name": "rice vinegar"}, product_id=None) is True
+    assert repo.is_staple(ingredient={"food_name": "gochugaru"}, product_id=None) is True
 
     repo.update_staple(staple.id, active=False)
 
-    assert repo.is_staple(ingredient={"food_name": "rice vinegar"}, product_id=None) is False
+    assert repo.is_staple(ingredient={"food_name": "gochugaru"}, product_id=None) is False
 
 
 def test_disabled_seeded_staples_stay_disabled_after_restart(tmp_path) -> None:
