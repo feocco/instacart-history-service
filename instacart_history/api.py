@@ -6,11 +6,11 @@ from typing import Any
 
 import anyio
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from instacart_history.importer import InstacartCsvImporter
-from instacart_history.repository import HistoryRepository, IngredientMapping, ProductCandidate
+from instacart_history.repository import HistoryRepository, IngredientMapping, ProductCandidate, Staple
 from instacart_history.service import RecommendationService
 
 
@@ -28,13 +28,30 @@ class ImportFilesRequest(BaseModel):
 
 
 class IngredientsRequest(BaseModel):
+    include_staples: bool = False
     ingredients: list[dict[str, Any]] | None = None
     consolidated: list[dict[str, Any]] | None = None
     by_recipe: list[dict[str, Any]] | None = None
 
 
 class PlanRecommendationRequest(BaseModel):
+    include_staples: bool = False
     planner_ingredients: dict[str, Any] | None = None
+
+
+class StapleCreateRequest(BaseModel):
+    scope: str = Field(pattern="^(ingredient_text|ingredient_key|product_id)$")
+    value: str
+    label: str
+    source: str = Field(default="manual", pattern="^(seed|manual|llm)$")
+
+
+class StapleUpdateRequest(BaseModel):
+    scope: str | None = Field(default=None, pattern="^(ingredient_text|ingredient_key|product_id)$")
+    value: str | None = None
+    label: str | None = None
+    active: bool | None = None
+    source: str | None = Field(default=None, pattern="^(seed|manual|llm)$")
 
 
 class MappingUpdateRequest(BaseModel):
@@ -90,7 +107,7 @@ def create_app(service: RecommendationService) -> FastAPI:
     @app.post("/v1/recommendations/ingredients")
     async def recommend_ingredients(request: IngredientsRequest) -> dict[str, Any]:
         ingredients = flatten_ingredients(request)
-        return await anyio.to_thread.run_sync(service.recommend, ingredients)
+        return await anyio.to_thread.run_sync(lambda: service.recommend(ingredients, include_staples=request.include_staples))
 
     @app.post("/v1/plans/{plan_id}/recommendations")
     async def recommend_plan(plan_id: str, request: PlanRecommendationRequest | None = None) -> dict[str, Any]:
@@ -99,6 +116,22 @@ def create_app(service: RecommendationService) -> FastAPI:
                 lambda: service.recommend_plan(
                     plan_id,
                     planner_ingredients=(request.planner_ingredients if request else None),
+                    include_staples=(request.include_staples if request else False),
+                )
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"planner lookup failed: {exc}") from exc
+
+    @app.post("/v1/plans/{plan_id}/shopping-prompt", response_class=PlainTextResponse)
+    async def shopping_prompt(plan_id: str, request: PlanRecommendationRequest | None = None) -> str:
+        try:
+            return await anyio.to_thread.run_sync(
+                lambda: service.shopping_prompt(
+                    plan_id,
+                    planner_ingredients=(request.planner_ingredients if request else None),
+                    include_staples=(request.include_staples if request else False),
                 )
             )
         except RuntimeError as exc:
@@ -115,6 +148,48 @@ def create_app(service: RecommendationService) -> FastAPI:
     @app.get("/v1/products")
     async def search_products(q: str, limit: int = 25) -> list[dict[str, Any]]:
         return [product_payload(product) for product in service.repo.find_products(q, limit=limit)]
+
+    @app.get("/v1/staples")
+    async def list_staples(active: bool | None = None) -> list[dict[str, Any]]:
+        return [staple_payload(staple) for staple in service.repo.list_staples(active=active)]
+
+    @app.post("/v1/staples")
+    async def create_staple(request: StapleCreateRequest) -> dict[str, Any]:
+        try:
+            staple = service.repo.upsert_staple(
+                scope=request.scope,
+                value=request.value,
+                label=request.label,
+                source=request.source,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return staple_payload(staple)
+
+    @app.patch("/v1/staples/{staple_id}")
+    async def update_staple(staple_id: int, request: StapleUpdateRequest) -> dict[str, Any]:
+        try:
+            staple = service.repo.update_staple(
+                staple_id,
+                scope=request.scope,
+                value=request.value,
+                label=request.label,
+                active=request.active,
+                source=request.source,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="staple not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return staple_payload(staple)
+
+    @app.delete("/v1/staples/{staple_id}")
+    async def delete_staple(staple_id: int) -> dict[str, Any]:
+        try:
+            staple = service.repo.update_staple(staple_id, active=False)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="staple not found") from exc
+        return staple_payload(staple)
 
     @app.patch("/v1/mappings/{mapping_id}")
     async def update_mapping(mapping_id: int, request: MappingUpdateRequest) -> dict[str, Any]:
@@ -136,7 +211,11 @@ def create_app(service: RecommendationService) -> FastAPI:
     async def admin() -> str:
         mappings = service.repo.list_mappings()
         rows = "\n".join(admin_row(service.repo, mapping) for mapping in mappings)
-        return ADMIN_HTML.replace("{{ rows }}", rows or "<tr><td colspan='7'>No mappings yet.</td></tr>")
+        staple_rows = "\n".join(staple_row(staple) for staple in service.repo.list_staples())
+        return (
+            ADMIN_HTML.replace("{{ rows }}", rows or "<tr><td colspan='7'>No mappings yet.</td></tr>")
+            .replace("{{ staple_rows }}", staple_rows or "<tr><td colspan='6'>No staples yet.</td></tr>")
+        )
 
     return app
 
@@ -184,6 +263,19 @@ def product_payload(product: ProductCandidate) -> dict[str, Any]:
     }
 
 
+def staple_payload(staple: Staple) -> dict[str, Any]:
+    return {
+        "id": staple.id,
+        "scope": staple.scope,
+        "value": staple.value,
+        "label": staple.label,
+        "active": staple.active,
+        "source": staple.source,
+        "created_at": staple.created_at,
+        "updated_at": staple.updated_at,
+    }
+
+
 def product_label(product: ProductCandidate | None) -> str:
     if product is None:
         return ""
@@ -219,6 +311,37 @@ def status_options(current: str) -> str:
     for status in ("approved", "suggested", "rejected", "needs_review"):
         selected = " selected" if status == current else ""
         options.append(f'<option value="{status}"{selected}>{status}</option>')
+    return "\n".join(options)
+
+
+def staple_row(staple: Staple) -> str:
+    return f"""
+    <tr>
+      <td>{staple.id}</td>
+      <td>{escape(staple.label)}</td>
+      <td>{escape(staple.scope)}</td>
+      <td>{escape(staple.value)}</td>
+      <td>{'yes' if staple.active else 'no'}</td>
+      <td>
+        <form onsubmit="return updateStaple(event, {staple.id})">
+          <input name="label" value="{escape(staple.label)}" placeholder="label">
+          <select name="scope">
+            {staple_scope_options(staple.scope)}
+          </select>
+          <input name="value" value="{escape(staple.value)}" placeholder="value">
+          <label><input type="checkbox" name="active" {'checked' if staple.active else ''}> active</label>
+          <button type="submit">Save</button>
+        </form>
+      </td>
+    </tr>
+    """
+
+
+def staple_scope_options(current: str) -> str:
+    options = []
+    for scope in ("ingredient_text", "ingredient_key", "product_id"):
+        selected = " selected" if scope == current else ""
+        options.append(f'<option value="{scope}"{selected}>{scope}</option>')
     return "\n".join(options)
 
 
@@ -259,6 +382,34 @@ ADMIN_HTML = """
     </form>
     <div id="product-results"></div>
   </section>
+  <section>
+    <h2>Staples</h2>
+    <form onsubmit="return createStaple(event)">
+      <input name="label" placeholder="label">
+      <select name="scope">
+        <option value="ingredient_text">ingredient_text</option>
+        <option value="ingredient_key">ingredient_key</option>
+        <option value="product_id">product_id</option>
+      </select>
+      <input name="value" placeholder="value">
+      <button type="submit">Add staple</button>
+    </form>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Label</th>
+          <th>Scope</th>
+          <th>Value</th>
+          <th>Active</th>
+          <th>Edit</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{ staple_rows }}
+      </tbody>
+    </table>
+  </section>
   <table>
     <thead>
       <tr>
@@ -285,6 +436,48 @@ ADMIN_HTML = """
         hint: form.hint.value || null
       };
       const response = await fetch(`/v1/mappings/${id}`, {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        alert(await response.text());
+        return false;
+      }
+      window.location.reload();
+      return false;
+    }
+    async function createStaple(event) {
+      event.preventDefault();
+      const form = event.target;
+      const payload = {
+        label: form.label.value,
+        scope: form.scope.value,
+        value: form.value.value,
+        source: "manual"
+      };
+      const response = await fetch("/v1/staples", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        alert(await response.text());
+        return false;
+      }
+      window.location.reload();
+      return false;
+    }
+    async function updateStaple(event, id) {
+      event.preventDefault();
+      const form = event.target;
+      const payload = {
+        label: form.label.value,
+        scope: form.scope.value,
+        value: form.value.value,
+        active: form.active.checked
+      };
+      const response = await fetch(`/v1/staples/${id}`, {
         method: "PATCH",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload)

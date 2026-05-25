@@ -105,3 +105,85 @@ def test_rejected_mappings_are_not_reused(tmp_path) -> None:
 
     assert result["ingredients"][0]["product_id"] == "new"
     assert matcher.calls
+
+
+def test_seeded_staples_are_idempotent_and_filter_by_ingredient_text(tmp_path) -> None:
+    repo = HistoryRepository(tmp_path / "history.sqlite3")
+    first_count = len(repo.list_staples())
+    repo.seed_common_staples()
+
+    assert len(repo.list_staples()) == first_count
+    assert repo.is_staple(ingredient={"food_name": "olive oil"}, product_id=None) is True
+    assert repo.is_staple(ingredient={"food_name": "rigatoni"}, product_id=None) is False
+
+
+def test_inactive_staples_do_not_filter_items(tmp_path) -> None:
+    repo = HistoryRepository(tmp_path / "history.sqlite3")
+    staple = repo.upsert_staple(scope="ingredient_text", value="rice vinegar", label="rice vinegar", source="manual")
+
+    assert repo.is_staple(ingredient={"food_name": "rice vinegar"}, product_id=None) is True
+
+    repo.update_staple(staple.id, active=False)
+
+    assert repo.is_staple(ingredient={"food_name": "rice vinegar"}, product_id=None) is False
+
+
+def test_disabled_seeded_staples_stay_disabled_after_restart(tmp_path) -> None:
+    db_path = tmp_path / "history.sqlite3"
+    repo = HistoryRepository(db_path)
+    olive_oil = next(staple for staple in repo.list_staples() if staple.label == "olive oil")
+
+    repo.update_staple(olive_oil.id, active=False)
+    restarted = HistoryRepository(db_path)
+
+    assert restarted.is_staple(ingredient={"food_name": "olive oil"}, product_id=None) is False
+
+
+def test_recommendations_exclude_staples_by_default_and_include_on_request(tmp_path) -> None:
+    repo = HistoryRepository(tmp_path / "history.sqlite3")
+    add_product(repo, "oil-1", "Wegmans Olive Oil")
+    add_product(repo, "tofu-1", "Wegmans Organic Extra Firm Tofu")
+    matcher = RecordingMatcher(MatchDecision("tofu-1", 0.9, "Tofu match.", False))
+    service = RecommendationService(repo=repo, matcher=matcher)
+
+    repo.save_mapping(
+        ingredient_key="olive_oil",
+        ingredient_text="olive oil",
+        selected_product_id="oil-1",
+        status="approved",
+        confidence=1.0,
+        reason="Manual.",
+        hint=None,
+        source="manual",
+    )
+
+    default_result = service.recommend([{"food_name": "olive oil"}, {"food_name": "tofu"}])
+    include_result = service.recommend(
+        [{"food_name": "olive oil"}, {"food_name": "tofu"}],
+        include_staples=True,
+    )
+
+    assert [item["food_name"] for item in default_result["ingredients"]] == ["tofu"]
+    assert [item["food_name"] for item in include_result["ingredients"]] == ["olive oil", "tofu"]
+
+
+def test_product_id_staples_filter_mapped_items(tmp_path) -> None:
+    repo = HistoryRepository(tmp_path / "history.sqlite3")
+    add_product(repo, "broth-1", "Wegmans Culinary Vegetable Stock")
+    repo.upsert_staple(scope="product_id", value="broth-1", label="vegetable stock", source="manual")
+    repo.save_mapping(
+        ingredient_key="vegetable_stock",
+        ingredient_text="vegetable stock",
+        selected_product_id="broth-1",
+        status="approved",
+        confidence=1.0,
+        reason="Manual.",
+        hint=None,
+        source="manual",
+    )
+    matcher = RecordingMatcher(MatchDecision("broth-1", 1.0, "Should not be called.", False))
+
+    result = RecommendationService(repo=repo, matcher=matcher).recommend([{"food_name": "vegetable stock"}])
+
+    assert result["ingredients"] == []
+    assert matcher.calls == []

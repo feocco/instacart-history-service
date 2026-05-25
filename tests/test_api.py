@@ -192,6 +192,122 @@ def test_plan_recommendations_fetches_planner_ingredients(tmp_path) -> None:
     assert len(matcher.calls) == 1
 
 
+def test_recommendation_endpoint_excludes_staples_by_default_and_includes_on_request(tmp_path) -> None:
+    client, repo, matcher = client_for(tmp_path)
+    seed_product(repo, product_id="oil-1", title="Wegmans Olive Oil")
+    seed_product(repo, product_id="tofu-1", title="Wegmans Organic Extra Firm Tofu")
+    repo.save_mapping(
+        ingredient_key="olive_oil",
+        ingredient_text="olive oil",
+        selected_product_id="oil-1",
+        status="approved",
+        confidence=1.0,
+        reason="Manual.",
+        hint=None,
+        source="manual",
+    )
+
+    default_response = client.post(
+        "/v1/recommendations/ingredients",
+        json={"ingredients": [{"food_name": "olive oil"}, {"food_name": "tofu"}]},
+    )
+    include_response = client.post(
+        "/v1/recommendations/ingredients",
+        json={"include_staples": True, "ingredients": [{"food_name": "olive oil"}, {"food_name": "tofu"}]},
+    )
+
+    assert default_response.status_code == 200
+    assert [item["food_name"] for item in default_response.json()["ingredients"]] == ["tofu"]
+    assert include_response.status_code == 200
+    assert [item["food_name"] for item in include_response.json()["ingredients"]] == ["olive oil", "tofu"]
+    assert len(matcher.calls) == 1
+
+
+def test_staple_management_endpoints(tmp_path) -> None:
+    client, _, _ = client_for(tmp_path)
+
+    seeded = client.get("/v1/staples").json()
+    assert any(staple["label"] == "olive oil" for staple in seeded)
+
+    created = client.post(
+        "/v1/staples",
+        json={"scope": "ingredient_text", "value": "gochugaru", "label": "gochugaru", "source": "manual"},
+    )
+    assert created.status_code == 200
+    assert created.json()["active"] is True
+
+    patched = client.patch(f"/v1/staples/{created.json()['id']}", json={"active": False})
+
+    assert patched.status_code == 200
+    assert patched.json()["active"] is False
+
+
+def test_shopping_prompt_omits_staples_and_metadata(tmp_path) -> None:
+    client, repo, _ = client_for(tmp_path)
+    seed_product(repo, product_id="oil-1", title="Wegmans Olive Oil")
+    seed_product(repo, product_id="tofu-1", title="Wegmans Organic Extra Firm Tofu")
+    repo.save_mapping(
+        ingredient_key="olive_oil",
+        ingredient_text="olive oil",
+        selected_product_id="oil-1",
+        status="approved",
+        confidence=1.0,
+        reason="Manual.",
+        hint=None,
+        source="manual",
+    )
+
+    response = client.post(
+        "/v1/plans/plan-1/shopping-prompt",
+        json={
+            "planner_ingredients": {
+                "plan_id": "plan-1",
+                "consolidated": [
+                    {"food_name": "olive oil", "quantity": 2, "unit_name": "tablespoon"},
+                    {"food_name": "tofu", "quantity": 1, "unit_name": "14-oz package"},
+                ],
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "Please create me an Instacart order" in response.text
+    assert "Wegmans Organic Extra Firm Tofu — 1 14-oz package" in response.text
+    assert "Olive Oil" not in response.text
+    assert "mapping_status" not in response.text
+    assert "product_url" not in response.text
+
+
+def test_shopping_prompt_can_include_staples(tmp_path) -> None:
+    client, repo, _ = client_for(tmp_path)
+    seed_product(repo, product_id="oil-1", title="Wegmans Olive Oil")
+    repo.save_mapping(
+        ingredient_key="olive_oil",
+        ingredient_text="olive oil",
+        selected_product_id="oil-1",
+        status="approved",
+        confidence=1.0,
+        reason="Manual.",
+        hint=None,
+        source="manual",
+    )
+
+    response = client.post(
+        "/v1/plans/plan-1/shopping-prompt",
+        json={
+            "include_staples": True,
+            "planner_ingredients": {
+                "plan_id": "plan-1",
+                "consolidated": [{"food_name": "olive oil", "quantity": 2, "unit_name": "tablespoon"}],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Wegmans Olive Oil — 2 tablespoons" in response.text
+
+
 def test_admin_page_loads_and_includes_suggested_mapping(tmp_path) -> None:
     client, repo, _ = client_for(tmp_path)
     seed_product(repo)
@@ -211,3 +327,4 @@ def test_admin_page_loads_and_includes_suggested_mapping(tmp_path) -> None:
     assert response.status_code == 200
     assert "rigatoni" in response.text
     assert "De Cecco Rigatoni" in response.text
+    assert "Staples" in response.text

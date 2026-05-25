@@ -30,7 +30,15 @@ curl -X POST http://localhost:8095/v1/recommendations/ingredients \
   -d '{"ingredients":[{"food_name":"rigatoni","quantity":1,"unit_name":"box"}]}'
 ```
 
-Review suggested mappings at `http://localhost:8095/admin`.
+Generate the copy/paste prompt for the latest accepted planner plan:
+
+```bash
+curl -X POST http://localhost:8095/v1/plans/latest/shopping-prompt \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+Review suggested mappings and staples at `http://localhost:8095/admin`.
 
 ## Docs
 

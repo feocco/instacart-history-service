@@ -65,6 +65,55 @@ class MappingAttempt:
     created_at: str
 
 
+@dataclass(frozen=True)
+class Staple:
+    id: int
+    scope: str
+    value: str
+    label: str
+    active: bool
+    source: str
+    created_at: str
+    updated_at: str
+
+
+COMMON_STAPLES: tuple[str, ...] = (
+    "all-purpose flour",
+    "black pepper",
+    "broth",
+    "chicken broth",
+    "chili flake",
+    "cooking oil",
+    "cracked black pepper",
+    "curry powder",
+    "dried thyme",
+    "extra virgin olive oil",
+    "fennel seed",
+    "flour",
+    "garam masala",
+    "ground turmeric",
+    "honey",
+    "kosher salt",
+    "lower sodium tamari",
+    "neutral cooking oil",
+    "olive oil",
+    "paprika",
+    "rice vinegar",
+    "salt",
+    "salt and pepper",
+    "sea salt",
+    "sesame oil",
+    "sesame seeds",
+    "soy sauce",
+    "tamari",
+    "toasted sesame oil",
+    "toasted sesame seeds",
+    "vegetable broth",
+    "vegetable stock",
+    "vinegar",
+)
+
+
 class HistoryRepository:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -142,8 +191,35 @@ class HistoryRepository:
                     review_required INTEGER NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS staples (
+                    id INTEGER PRIMARY KEY,
+                    scope TEXT NOT NULL CHECK(scope IN ('ingredient_text', 'ingredient_key', 'product_id')),
+                    value TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    source TEXT NOT NULL CHECK(source IN ('seed', 'manual', 'llm')),
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(scope, value)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_staples_scope_value_active
+                    ON staples(scope, value, active);
                 """
             )
+        self.seed_common_staples()
+
+    def seed_common_staples(self) -> None:
+        with self.connect() as conn:
+            for staple in COMMON_STAPLES:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO staples (scope, value, label, active, source)
+                    VALUES ('ingredient_text', ?, ?, 1, 'seed')
+                    """,
+                    (staple_value("ingredient_text", staple), staple),
+                )
 
     def upsert_order(
         self,
@@ -422,6 +498,84 @@ class HistoryRepository:
             rows = conn.execute("SELECT * FROM mapping_attempts ORDER BY id").fetchall()
         return [self._attempt(row) for row in rows]
 
+    def upsert_staple(self, *, scope: str, value: str, label: str, source: str = "manual") -> Staple:
+        normalized = staple_value(scope, value)
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO staples (scope, value, label, active, source)
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(scope, value) DO UPDATE SET
+                    label = excluded.label,
+                    active = 1,
+                    source = excluded.source,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (scope, normalized, label, source),
+            )
+            row = conn.execute("SELECT * FROM staples WHERE scope = ? AND value = ?", (scope, normalized)).fetchone()
+        return self._staple(row)
+
+    def list_staples(self, *, active: bool | None = None) -> list[Staple]:
+        query = "SELECT * FROM staples"
+        params: tuple[Any, ...] = ()
+        if active is not None:
+            query += " WHERE active = ?"
+            params = (int(active),)
+        query += " ORDER BY active DESC, label ASC, id ASC"
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._staple(row) for row in rows]
+
+    def update_staple(
+        self,
+        staple_id: int,
+        *,
+        scope: str | None = None,
+        value: str | None = None,
+        label: str | None = None,
+        active: bool | None = None,
+        source: str | None = None,
+    ) -> Staple:
+        current = self.get_staple(staple_id)
+        next_scope = scope if scope is not None else current.scope
+        next_value = staple_value(next_scope, value if value is not None else current.value)
+        next_label = label if label is not None else current.label
+        next_active = active if active is not None else current.active
+        next_source = source if source is not None else current.source
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE staples
+                SET scope = ?, value = ?, label = ?, active = ?, source = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (next_scope, next_value, next_label, int(next_active), next_source, staple_id),
+            )
+            row = conn.execute("SELECT * FROM staples WHERE id = ?", (staple_id,)).fetchone()
+        return self._staple(row)
+
+    def get_staple(self, staple_id: int) -> Staple:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM staples WHERE id = ?", (staple_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"staple not found: {staple_id}")
+        return self._staple(row)
+
+    def is_staple(self, *, ingredient: dict[str, Any], product_id: str | None) -> bool:
+        checks = staple_checks(ingredient=ingredient, product_id=product_id)
+        if not checks:
+            return False
+        with self.connect() as conn:
+            for scope, value in checks:
+                row = conn.execute(
+                    "SELECT 1 FROM staples WHERE scope = ? AND value = ? AND active = 1 LIMIT 1",
+                    (scope, value),
+                ).fetchone()
+                if row is not None:
+                    return True
+        return False
+
     @staticmethod
     def _product_candidate(row: sqlite3.Row) -> ProductCandidate:
         return ProductCandidate(
@@ -484,6 +638,46 @@ class HistoryRepository:
             created_at=str(row["created_at"]),
         )
 
+    @staticmethod
+    def _staple(row: sqlite3.Row) -> Staple:
+        return Staple(
+            id=int(row["id"]),
+            scope=str(row["scope"]),
+            value=str(row["value"]),
+            label=str(row["label"]),
+            active=bool(row["active"]),
+            source=str(row["source"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )
+
 
 def normalize_for_search(value: str) -> str:
     return " ".join("".join(ch.lower() if ch.isalnum() else " " for ch in value).split())
+
+
+def staple_value(scope: str, value: str) -> str:
+    if scope not in {"ingredient_text", "ingredient_key", "product_id"}:
+        raise ValueError(f"invalid staple scope: {scope}")
+    if scope == "product_id":
+        return value.strip()
+    if scope == "ingredient_key":
+        return normalize_for_search(value).replace(" ", "_")
+    return normalize_for_search(value)
+
+
+def staple_checks(*, ingredient: dict[str, Any], product_id: str | None) -> list[tuple[str, str]]:
+    checks: list[tuple[str, str]] = []
+    if product_id:
+        checks.append(("product_id", product_id.strip()))
+    food_id = ingredient.get("food_id")
+    if food_id:
+        checks.append(("ingredient_key", staple_value("ingredient_key", str(food_id))))
+    food = ingredient.get("food")
+    if isinstance(food, dict) and food.get("id"):
+        checks.append(("ingredient_key", staple_value("ingredient_key", str(food["id"]))))
+    for key in ("food_name", "display", "originalText"):
+        value = ingredient.get(key)
+        if value:
+            checks.append(("ingredient_text", staple_value("ingredient_text", str(value))))
+    return list(dict.fromkeys(checks))

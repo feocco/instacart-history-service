@@ -20,10 +20,24 @@ class RecommendationService:
         self.matcher = matcher
         self.planner_base_url = planner_base_url.rstrip("/") if planner_base_url else None
 
-    def recommend(self, ingredients: list[dict[str, Any]]) -> dict[str, Any]:
-        return {"ingredients": [self._recommend_one(ingredient) for ingredient in ingredients]}
+    def recommend(self, ingredients: list[dict[str, Any]], *, include_staples: bool = False) -> dict[str, Any]:
+        recommended: list[dict[str, Any]] = []
+        for ingredient in ingredients:
+            if not include_staples and self.repo.is_staple(ingredient=ingredient, product_id=None):
+                continue
+            item = self._recommend_one(ingredient)
+            if not include_staples and self.repo.is_staple(ingredient=ingredient, product_id=item.get("product_id")):
+                continue
+            recommended.append(item)
+        return {"ingredients": recommended}
 
-    def recommend_plan(self, plan_id: str, *, planner_ingredients: dict[str, Any] | None = None) -> dict[str, Any]:
+    def recommend_plan(
+        self,
+        plan_id: str,
+        *,
+        planner_ingredients: dict[str, Any] | None = None,
+        include_staples: bool = False,
+    ) -> dict[str, Any]:
         payload = planner_ingredients if planner_ingredients is not None else self.fetch_plan_ingredients(plan_id)
         ingredients = payload.get("consolidated")
         if not isinstance(ingredients, list):
@@ -33,12 +47,37 @@ class RecommendationService:
                     for ingredient in recipe.get("ingredients") or []:
                         if isinstance(ingredient, dict):
                             ingredients.append({**ingredient, "source_recipe": recipe.get("recipe_title")})
-        result = self.recommend(ingredients)
+        result = self.recommend(ingredients, include_staples=include_staples)
         return {
             "plan_id": payload.get("plan_id", plan_id),
             "planner_status": payload.get("status"),
             **result,
         }
+
+    def shopping_prompt(
+        self,
+        plan_id: str,
+        *,
+        planner_ingredients: dict[str, Any] | None = None,
+        include_staples: bool = False,
+    ) -> str:
+        result = self.recommend_plan(
+            plan_id,
+            planner_ingredients=planner_ingredients,
+            include_staples=include_staples,
+        )
+        lines = [
+            "Please create me an Instacart order with the items and quantities below. "
+            "Use the specific product names when provided.",
+            "",
+        ]
+        for item in result["ingredients"]:
+            name = item.get("recommended_product_title") or ingredient_text_for(item)
+            if not name or name == "unknown ingredient":
+                continue
+            quantity = format_quantity(item.get("quantity"), item.get("unit_name"))
+            lines.append(f"- {name}{f' — {quantity}' if quantity else ''}")
+        return "\n".join(lines).rstrip() + "\n"
 
     def fetch_plan_ingredients(self, plan_id: str) -> dict[str, Any]:
         if not self.planner_base_url:
@@ -148,3 +187,26 @@ def annotated(
         "mapping_id": mapping.id,
         "mapping_reason": mapping.reason,
     }
+
+
+def format_quantity(quantity: Any, unit_name: Any) -> str:
+    if quantity is None or quantity == "":
+        return ""
+    quantity_text = ("%g" % quantity) if isinstance(quantity, int | float) else str(quantity)
+    if not unit_name:
+        return quantity_text
+    unit = str(unit_name)
+    if quantity_text != "1" and unit in {
+        "cup",
+        "tablespoon",
+        "teaspoon",
+        "clove",
+        "rib",
+        "ribs",
+        "pack",
+        "package",
+        "pound",
+        "gram",
+    }:
+        unit = unit.rstrip("s") + "s"
+    return f"{quantity_text} {unit}"

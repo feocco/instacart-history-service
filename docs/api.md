@@ -70,6 +70,7 @@ Request:
 
 ```json
 {
+  "include_staples": false,
   "ingredients": [
     {"food_name": "rigatoni", "quantity": 1, "unit_name": "box"}
   ]
@@ -77,7 +78,8 @@ Request:
 ```
 
 The endpoint also accepts a top-level `consolidated` array or `by_recipe` array
-from `mealie-planner`.
+from `mealie-planner`. Active staples are excluded by default; set
+`include_staples` to `true` to keep them.
 
 Response:
 
@@ -120,6 +122,30 @@ Patch request:
 }
 ```
 
+## Staples
+
+```http
+GET /v1/staples
+POST /v1/staples
+PATCH /v1/staples/{staple_id}
+DELETE /v1/staples/{staple_id}
+```
+
+Staples are stored separately from mappings. They can match either normalized
+ingredient text, ingredient keys, or product ids. Deletes are soft deletes that
+set `active` to `false`.
+
+Create request:
+
+```json
+{
+  "scope": "ingredient_text",
+  "value": "olive oil",
+  "label": "olive oil",
+  "source": "manual"
+}
+```
+
 ## Product Search
 
 ```http
@@ -142,8 +168,31 @@ When `MEALIE_PLANNER_BASE_URL` is configured, this fetches:
 ```
 
 Then it recommends Instacart products for the returned consolidated ingredient
-rows.
+rows. Request bodies accept `include_staples`, defaulting to `false`.
 
 Saved `approved`, `suggested`, and `needs_review` mappings are reused on later
 runs so first-pass LLM suggestions stay stable. `suggested` and `needs_review`
 rows still return `review_required: true`; rejected mappings are not reused.
+
+## Shopping Prompt
+
+```http
+POST /v1/plans/{plan_id}/shopping-prompt
+```
+
+Request:
+
+```json
+{"include_staples": false}
+```
+
+This returns `text/plain` suitable for pasting into ChatGPT with Instacart:
+
+```text
+Please create me an Instacart order with the items and quantities below. Use the specific product names when provided.
+
+- Wegmans Organic Extra Firm Tofu — 1 14-oz package
+```
+
+Use `plan_id=latest` to fetch the latest accepted planner plan. The prompt omits
+mapping metadata, URLs, confidence, and review fields.
