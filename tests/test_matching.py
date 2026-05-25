@@ -62,6 +62,29 @@ def test_ambiguous_ingredients_are_flagged_for_review(tmp_path) -> None:
     assert result["ingredients"][0]["confidence"] == 0.55
 
 
+def test_suggested_mapping_is_reused_for_stable_followup_results(tmp_path) -> None:
+    repo = HistoryRepository(tmp_path / "history.sqlite3")
+    add_product(repo, "rigatoni-1", "De Cecco Rigatoni, No. 24")
+    repo.save_mapping(
+        ingredient_key="rigatoni",
+        ingredient_text="rigatoni",
+        selected_product_id="rigatoni-1",
+        status="suggested",
+        confidence=0.82,
+        reason="Initial LLM suggestion.",
+        hint=None,
+        source="llm",
+    )
+    matcher = RecordingMatcher(MatchDecision("wrong", 0.1, "Should not be called.", True))
+
+    result = RecommendationService(repo=repo, matcher=matcher).recommend([{"food_name": "rigatoni"}])
+
+    assert result["ingredients"][0]["product_id"] == "rigatoni-1"
+    assert result["ingredients"][0]["mapping_status"] == "suggested"
+    assert result["ingredients"][0]["review_required"] is True
+    assert matcher.calls == []
+
+
 def test_rejected_mappings_are_not_reused(tmp_path) -> None:
     repo = HistoryRepository(tmp_path / "history.sqlite3")
     add_product(repo, "old", "Wrong Rigatoni")

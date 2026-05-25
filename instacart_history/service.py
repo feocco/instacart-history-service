@@ -54,14 +54,16 @@ class RecommendationService:
     def _recommend_one(self, ingredient: dict[str, Any]) -> dict[str, Any]:
         ingredient_text = ingredient_text_for(ingredient)
         ingredient_key = ingredient_key_for(ingredient)
-        approved = self.repo.latest_mapping(ingredient_key, statuses=["approved"])
-        if approved and approved.selected_product_id:
-            product = self.repo.product_by_product_id(approved.selected_product_id)
-            return annotated(ingredient, product, approved, review_required=False)
+        saved = self.repo.latest_mapping(
+            ingredient_key,
+            statuses=["approved", "suggested", "needs_review", "rejected"],
+        )
+        if saved and saved.status != "rejected":
+            product = self.repo.product_by_product_id(saved.selected_product_id) if saved.selected_product_id else None
+            return annotated(ingredient, product, saved, review_required=saved.status != "approved")
 
-        prior = self.repo.latest_mapping(ingredient_key, statuses=["suggested", "needs_review", "rejected"])
         candidates = self.repo.find_products(ingredient_text or ingredient_key, limit=20)
-        decision = self.matcher.choose(ingredient=ingredient, candidates=candidates, hint=prior.hint if prior else None)
+        decision = self.matcher.choose(ingredient=ingredient, candidates=candidates, hint=saved.hint if saved else None)
         product = self.repo.product_by_product_id(decision.selected_product_id) if decision.selected_product_id else None
         status = "needs_review" if product is None else "suggested"
         mapping = self.repo.save_mapping(
@@ -71,14 +73,14 @@ class RecommendationService:
             status=status,
             confidence=decision.confidence,
             reason=decision.reason,
-            hint=prior.hint if prior else None,
+            hint=saved.hint if saved else None,
             source="llm",
         )
         self.repo.record_attempt(
             ingredient_key=ingredient_key,
             llm_input={
                 "ingredient": ingredient,
-                "hint": prior.hint if prior else None,
+                "hint": saved.hint if saved else None,
                 "candidates": [candidate_payload(candidate) for candidate in candidates],
             },
             llm_output={

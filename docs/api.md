@@ -143,3 +143,7 @@ When `MEALIE_PLANNER_BASE_URL` is configured, this fetches:
 
 Then it recommends Instacart products for the returned consolidated ingredient
 rows.
+
+Saved `approved`, `suggested`, and `needs_review` mappings are reused on later
+runs so first-pass LLM suggestions stay stable. `suggested` and `needs_review`
+rows still return `review_required: true`; rejected mappings are not reused.
