@@ -115,6 +115,7 @@ def test_seeded_staples_are_idempotent_and_filter_by_ingredient_text(tmp_path) -
     assert len(repo.list_staples()) == first_count
     assert repo.is_staple(ingredient={"food_name": "olive oil"}, product_id=None) is True
     assert repo.is_staple(ingredient={"food_name": "lower-sodium vegetable or chicken broth"}, product_id=None) is True
+    assert repo.is_staple(ingredient={"food_name": "Crushed Red Pepper Flakes"}, product_id=None) is True
     assert repo.is_staple(ingredient={"food_name": "rigatoni"}, product_id=None) is False
 
 
