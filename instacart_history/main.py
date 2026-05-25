@@ -15,7 +15,11 @@ def build_service() -> RecommendationService:
     config = AppConfig.from_env()
     config.data_dir.mkdir(parents=True, exist_ok=True)
     repo = HistoryRepository(config.db_path)
-    matcher = OpenAIIngredientMatcher(api_key=config.openai_api_key, model=config.openai_model)
+    matcher = OpenAIIngredientMatcher(
+        api_key=config.openai_api_key,
+        model=config.openai_model,
+        timeout_seconds=config.openai_timeout_seconds,
+    )
     return RecommendationService(
         repo=repo,
         matcher=matcher,

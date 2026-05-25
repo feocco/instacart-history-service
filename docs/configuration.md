@@ -7,7 +7,8 @@ The service reads `.env.local` first, then `.env`.
 | `DATA_DIR` | `data` | Directory for `instacart_history.sqlite3`. |
 | `OPENAI_API_KEY` | required | Required for unmapped ingredient matching. |
 | `OPENAI_MODEL` | `gpt-5-mini` | Model used for structured product matching. |
-| `MEALIE_PLANNER_BASE_URL` | unset | Optional planner API base URL for `POST /v1/plans/{plan_id}/recommendations`. On Mac mini containers, use `http://host.docker.internal:8096`. |
+| `OPENAI_TIMEOUT_SECONDS` | `30` | Per-request timeout for OpenAI matching calls. |
+| `MEALIE_PLANNER_BASE_URL` | unset | Optional planner API base URL for `POST /v1/plans/{plan_id}/recommendations`. On Mac mini containers, use `http://host.docker.internal:8097`. |
 | `HOST` | `0.0.0.0` | Uvicorn bind host. |
 | `PORT` | `8095` | Uvicorn port. |
 

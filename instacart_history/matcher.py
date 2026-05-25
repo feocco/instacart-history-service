@@ -37,8 +37,8 @@ class MatchResponse(BaseModel):
 
 
 class OpenAIIngredientMatcher:
-    def __init__(self, *, api_key: str, model: str) -> None:
-        self.client = OpenAI(api_key=api_key)
+    def __init__(self, *, api_key: str, model: str, timeout_seconds: float = 30) -> None:
+        self.client = OpenAI(api_key=api_key, timeout=timeout_seconds)
         self.model = model
 
     def choose(

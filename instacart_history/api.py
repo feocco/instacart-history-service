@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+import anyio
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
@@ -89,12 +90,17 @@ def create_app(service: RecommendationService) -> FastAPI:
     @app.post("/v1/recommendations/ingredients")
     async def recommend_ingredients(request: IngredientsRequest) -> dict[str, Any]:
         ingredients = flatten_ingredients(request)
-        return service.recommend(ingredients)
+        return await anyio.to_thread.run_sync(service.recommend, ingredients)
 
     @app.post("/v1/plans/{plan_id}/recommendations")
     async def recommend_plan(plan_id: str, request: PlanRecommendationRequest | None = None) -> dict[str, Any]:
         try:
-            return service.recommend_plan(plan_id, planner_ingredients=(request.planner_ingredients if request else None))
+            return await anyio.to_thread.run_sync(
+                lambda: service.recommend_plan(
+                    plan_id,
+                    planner_ingredients=(request.planner_ingredients if request else None),
+                )
+            )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:

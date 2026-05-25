@@ -12,6 +12,7 @@ class AppConfig:
     data_dir: Path
     openai_api_key: str
     openai_model: str
+    openai_timeout_seconds: float
     mealie_planner_base_url: str | None
 
     @classmethod
@@ -22,6 +23,7 @@ class AppConfig:
             data_dir=Path(os.environ.get("DATA_DIR", "data")),
             openai_api_key=required("OPENAI_API_KEY"),
             openai_model=os.environ.get("OPENAI_MODEL", "gpt-5-mini"),
+            openai_timeout_seconds=float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "30")),
             mealie_planner_base_url=os.environ.get("MEALIE_PLANNER_BASE_URL") or None,
         )
 
