@@ -14,6 +14,9 @@ uv run instacart-history
 
 The service listens on `http://localhost:8095` by default.
 
+Browse the built-in docs at `http://localhost:8095/docs` and fetch the schema
+at `http://localhost:8095/openapi.json`.
+
 Import the current exports:
 
 ```bash

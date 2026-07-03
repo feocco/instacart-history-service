@@ -59,6 +59,36 @@ def test_health_endpoint(tmp_path) -> None:
     assert client.get("/health").json() == {"status": "ok"}
 
 
+def test_docs_endpoint_serves_self_contained_html(tmp_path) -> None:
+    client, _, _ = client_for(tmp_path)
+
+    response = client.get("/docs")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    body = response.text
+    assert "Instacart History Service API" in body
+    assert "/openapi.json" in body
+    assert "https://" not in body
+    assert "unpkg" not in body
+    assert "cdn" not in body.lower()
+
+
+def test_openapi_endpoint_exposes_openapi_31_schema(tmp_path) -> None:
+    client, _, _ = client_for(tmp_path)
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schema = response.json()
+    assert schema["openapi"] == "3.1.0"
+    assert schema["info"]["title"] == "Instacart History Service"
+    assert schema["paths"]["/health"]["get"]["responses"]["200"]
+    assert "/v1/recommendations/ingredients" in schema["paths"]
+    assert "/v1/products" in schema["paths"]
+    assert "/v1/staples" in schema["paths"]
+
+
 def test_recommendation_uses_approved_mapping_without_calling_llm(tmp_path) -> None:
     client, repo, matcher = client_for(tmp_path)
     seed_product(repo)

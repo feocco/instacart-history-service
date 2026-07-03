@@ -1,5 +1,8 @@
 # API
 
+The service exposes browser-friendly docs at `GET /docs` and the machine-readable
+OpenAPI schema at `GET /openapi.json`.
+
 ## Health
 
 ```http

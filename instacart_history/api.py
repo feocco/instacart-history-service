@@ -62,11 +62,25 @@ class MappingUpdateRequest(BaseModel):
 
 
 def create_app(service: RecommendationService) -> FastAPI:
-    app = FastAPI(title="Instacart History Service", version="0.1.0")
+    app = FastAPI(
+        title="Instacart History Service",
+        version="0.1.0",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
 
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/openapi.json", include_in_schema=False)
+    async def openapi_json() -> dict[str, Any]:
+        return app.openapi()
+
+    @app.get("/docs", include_in_schema=False, response_class=HTMLResponse)
+    async def docs() -> str:
+        return render_docs_page(app)
 
     @app.post("/v1/import/instacart-csv")
     async def import_instacart_csv(request: ImportRequest) -> dict[str, int]:
@@ -218,6 +232,161 @@ def create_app(service: RecommendationService) -> FastAPI:
         )
 
     return app
+
+
+def render_docs_page(app: FastAPI) -> str:
+    schema = app.openapi()
+    path_sections: list[str] = []
+    for path, operations in sorted(schema.get("paths", {}).items()):
+        method_rows: list[str] = []
+        for method, operation in sorted(operations.items()):
+            summary = escape(str(operation.get("summary") or operation.get("operationId") or ""))
+            description = escape(str(operation.get("description") or ""))
+            method_rows.append(
+                f"""
+                <div class="operation">
+                  <span class="verb verb-{escape(method)}">{escape(method.upper())}</span>
+                  <div>
+                    <strong>{summary}</strong>
+                    <div class="description">{description}</div>
+                  </div>
+                </div>
+                """
+            )
+        path_sections.append(
+            f"""
+            <section class="path-group">
+              <h2>{escape(path)}</h2>
+              {''.join(method_rows)}
+            </section>
+            """
+        )
+
+    return f"""
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>{escape(str(schema["info"]["title"]))} API</title>
+      <style>
+        :root {{
+          color-scheme: light;
+          --bg: #f6f7f8;
+          --surface: #ffffff;
+          --text: #172026;
+          --muted: #5b6770;
+          --border: #d6dbe0;
+          --accent: #205493;
+        }}
+        body {{
+          margin: 0;
+          font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          color: var(--text);
+          background: var(--bg);
+        }}
+        main {{
+          max-width: 1080px;
+          margin: 0 auto;
+          padding: 32px 20px 48px;
+        }}
+        header {{
+          margin-bottom: 24px;
+        }}
+        h1 {{
+          margin: 0 0 8px;
+          font-size: 30px;
+          line-height: 1.1;
+        }}
+        .summary {{
+          margin: 0 0 10px;
+          color: var(--muted);
+        }}
+        .links {{
+          display: flex;
+          gap: 12px;
+          flex-wrap: wrap;
+          margin-top: 12px;
+        }}
+        .links a {{
+          color: var(--accent);
+          text-decoration: none;
+          font-weight: 600;
+        }}
+        .meta {{
+          display: flex;
+          gap: 12px;
+          flex-wrap: wrap;
+          color: var(--muted);
+          font-size: 14px;
+        }}
+        .path-group {{
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          padding: 16px 18px;
+          margin: 0 0 14px;
+        }}
+        .path-group h2 {{
+          margin: 0 0 12px;
+          font-size: 18px;
+          word-break: break-word;
+        }}
+        .operation {{
+          display: grid;
+          grid-template-columns: auto 1fr;
+          gap: 12px;
+          align-items: start;
+          padding: 10px 0;
+          border-top: 1px solid var(--border);
+        }}
+        .operation:first-of-type {{
+          border-top: 0;
+          padding-top: 0;
+        }}
+        .verb {{
+          display: inline-block;
+          min-width: 66px;
+          padding: 2px 8px;
+          border-radius: 999px;
+          text-align: center;
+          font-size: 12px;
+          font-weight: 700;
+          letter-spacing: 0;
+          color: #fff;
+          background: #52616b;
+        }}
+        .verb-get {{ background: #2f855a; }}
+        .verb-post {{ background: #2b6cb0; }}
+        .verb-patch {{ background: #b7791f; }}
+        .verb-delete {{ background: #c53030; }}
+        .description {{
+          margin-top: 4px;
+          color: var(--muted);
+          font-size: 14px;
+          white-space: pre-wrap;
+        }}
+      </style>
+    </head>
+    <body>
+      <main>
+        <header>
+          <h1>{escape(str(schema["info"]["title"]))} API</h1>
+          <p class="summary">{escape(str(schema.get("info", {}).get("description") or "Self-contained browser docs for the service HTTP API."))}</p>
+          <div class="meta">
+            <span>OpenAPI {escape(str(schema.get("openapi", "")))}</span>
+            <span>{len(schema.get("paths", {}))} paths</span>
+          </div>
+          <div class="links">
+            <a href="/openapi.json">OpenAPI JSON</a>
+            <a href="/health">Health check</a>
+          </div>
+        </header>
+        {''.join(path_sections)}
+      </main>
+    </body>
+    </html>
+    """
 
 
 def flatten_ingredients(request: IngredientsRequest) -> list[dict[str, Any]]:
